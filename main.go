@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,7 +33,7 @@ func init() {
 	}
 
 	const destDir = "build"
-	suffix := time.Now().Format("20060102150405")
+	suffix := time.Now().Format("20060102")
 	buildDirDriveFile = fmt.Sprintf("%s_%s/file", destDir, suffix)
 	if err := os.MkdirAll(buildDirDriveFile, os.ModePerm); err != nil {
 		log.Fatalf("Unable to create directory: %v", err)
@@ -52,7 +53,14 @@ func drivePermPath(name string) string {
 }
 
 func main() {
+	asAdmin := flag.Bool("admin", false,
+		"ドメイン管理者としてリクエストを発行します。リクエスト元が管理者であるドメインのすべての共有ドライブが返されます。")
+	driveID := flag.String("driveId", "",
+		"検索する共有ドライブのID。すべての共有ドライブが対象となります。")
+	flag.Parse()
+
 	ctx := context.Background()
+
 	b, err := os.ReadFile(clientSecretFile)
 	if err != nil {
 		log.Fatalf("Unable to read client secret file: %v", err)
@@ -72,7 +80,7 @@ func main() {
 
 	// 共有ドライブ一覧を取得
 	drs, err := svc.Drives.List().
-		UseDomainAdminAccess(true). // Workspace管理者権限で全て取得
+		UseDomainAdminAccess(*asAdmin). // Workspace管理者権限で全て取得
 		Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve drives: %v", err)
@@ -81,6 +89,10 @@ func main() {
 	for _, dr := range drs.Drives {
 		err := func() error {
 			fmt.Printf("Drive: %s (%s)\n", dr.Name, dr.Id)
+			if *driveID != "" && *driveID != dr.Id {
+				fmt.Printf("%cSkipped\n", rune(9))
+				return nil
+			}
 
 			f, err := os.Create(drivePermPath(dr.Name))
 			if err != nil {

@@ -27,6 +27,10 @@ var (
 )
 
 func init() {
+	if _, err := os.Stat(clientSecretFile); err != nil {
+		log.Fatalf("Unable to find file: %v", err)
+	}
+
 	const destDir = "build"
 	suffix := time.Now().Format("20060102150405")
 	buildDirDriveFile = fmt.Sprintf("%s_%s/file", destDir, suffix)

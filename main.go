@@ -66,9 +66,9 @@ func main() {
 		log.Fatalf("Unable to retrieve Drive client: %v", err)
 	}
 
-	// 共有ドライブ一覧を取得（Workspace管理者権限で全て取得）
+	// 共有ドライブ一覧を取得
 	drs, err := svc.Drives.List().
-		//UseDomainAdminAccess(true). // TODO Workspace管理者ではないので403エラーになる
+		UseDomainAdminAccess(true). // Workspace管理者権限で全て取得
 		Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve drives: %v", err)

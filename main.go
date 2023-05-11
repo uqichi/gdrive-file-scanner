@@ -80,6 +80,7 @@ func main() {
 
 	// 共有ドライブ一覧を取得
 	drs, err := svc.Drives.List().
+		PageSize(500).
 		UseDomainAdminAccess(*asAdmin). // Workspace管理者権限で全て取得
 		Do()
 	if err != nil {
@@ -105,6 +106,7 @@ func main() {
 
 			// 共有ドライブの権限情報を取得
 			perms, err := svc.Permissions.List(dr.Id).
+				PageSize(500).
 				SupportsAllDrives(true).
 				Fields("permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
 				Do()
@@ -138,7 +140,6 @@ func main() {
 			fileWriter := file.NewDriveFileWriter(f)
 			defer fileWriter.Flush()
 
-			const pageSize = 100
 			var pageToken string
 			for {
 				// 共有ドライブのファイルとフォルダのメタ情報を取得
@@ -146,7 +147,7 @@ func main() {
 					Corpora("drive").
 					DriveId(dr.Id).
 					IncludeItemsFromAllDrives(true).
-					PageSize(pageSize).
+					PageSize(500).
 					PageToken(pageToken).
 					SupportsAllDrives(true).
 					Fields("nextPageToken, files(mimeType, id, name, webViewLink, createdTime, modifiedTime, lastModifyingUser)").
@@ -160,6 +161,7 @@ func main() {
 
 					// ファイルとフォルダの権限情報を取得
 					permissionList, err := svc.Permissions.List(ff.Id).
+						PageSize(500).
 						SupportsAllDrives(true).
 						Fields("permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
 						Do()

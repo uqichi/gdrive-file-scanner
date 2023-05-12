@@ -83,7 +83,7 @@ func main() {
 	}
 
 	// If modifying these scopes, delete your previously saved token file.
-	config, err := google.ConfigFromJSON(b, drive.DriveReadonlyScope)
+	config, err := google.ConfigFromJSON(b, drive.DriveScope)
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}

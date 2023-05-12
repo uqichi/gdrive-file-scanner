@@ -52,7 +52,23 @@ func drivePermPath(name string) string {
 	return fmt.Sprintf("%s/%s.csv", buildDirDrivePerm, name)
 }
 
+const (
+	minPageSize = 1
+	maxPageSize = 100
+)
+
+func pageSize(size int64) int64 {
+	if size < minPageSize {
+		return minPageSize
+	}
+	if size > maxPageSize {
+		return maxPageSize
+	}
+	return size
+}
+
 func main() {
+	// Set commandline args
 	asAdmin := flag.Bool("admin", false,
 		"ドメイン管理者としてリクエストを発行します。リクエスト元が管理者であるドメインのすべての共有ドライブが返されます。")
 	driveID := flag.String("driveId", "",
@@ -79,116 +95,42 @@ func main() {
 	}
 
 	// 共有ドライブ一覧を取得
-	drs, err := svc.Drives.List().
-		PageSize(100).
-		UseDomainAdminAccess(*asAdmin). // Workspace管理者権限で全て取得
-		Do()
-	if err != nil {
-		log.Fatalf("Unable to retrieve drives: %v", err)
-	}
+	if err := svc.Drives.List().
+		Context(ctx).
+		UseDomainAdminAccess(*asAdmin).
+		PageSize(pageSize(100)).
+		Pages(ctx, func(list *drive.DriveList) error {
+			for _, dr := range list.Drives {
+				if err := func() error {
+					fmt.Printf("Drive: %s (%s)\n", dr.Name, dr.Id)
 
-	for _, dr := range drs.Drives {
-		err := func() error {
-			fmt.Printf("Drive: %s (%s)\n", dr.Name, dr.Id)
-			if *driveID != "" && *driveID != dr.Id {
-				fmt.Printf("%cSkipped\n", rune(9))
-				return nil
-			}
-
-			f, err := os.Create(drivePermPath(dr.Name))
-			if err != nil {
-				return fmt.Errorf("Unable to create file: %v", err)
-			}
-			defer f.Close()
-
-			permWriter := file.NewDrivePermissionWriter(f)
-			defer permWriter.Flush()
-
-			var pageToken string
-			for {
-				// 共有ドライブの権限情報を取得
-				perms, err := svc.Permissions.List(dr.Id).
-					PageSize(100).
-					SupportsAllDrives(true).
-					Fields("nextPageToken, permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
-					Do()
-				if err != nil {
-					return fmt.Errorf("Unable to retrieve permissions: %v", err)
-				}
-
-				// 共有ドライブの権限情報をファイルに保存
-				for _, p := range perms.Permissions {
-					for _, d := range p.PermissionDetails {
-						_ = permWriter.Write(file.DrivePermission{
-							Drive:          file.Drive{ID: dr.Id, Name: dr.Name},
-							DisplayName:    p.DisplayName,
-							EmailAddress:   p.EmailAddress,
-							Role:           p.Role,
-							Type:           p.Type,
-							Deleted:        p.Deleted,
-							PermissionType: d.PermissionType,
-							InheritedFrom:  d.InheritedFrom,
-							Inherited:      d.Inherited,
-						})
+					if *driveID != "" && *driveID != dr.Id {
+						// 共有ドライブIDの指定がある場合該当しないものはスキップ
+						fmt.Printf("%cSkipped\n", rune(9))
+						return nil
 					}
-				}
-				pageToken = perms.NextPageToken
-				if pageToken == "" {
-					break
-				}
-			}
 
-			f, err = os.Create(driveFilePath(dr.Name))
-			if err != nil {
-				return fmt.Errorf("Unable to create file: %v", err)
-			}
-			defer f.Close()
+					f, err := os.Create(drivePermPath(dr.Name))
+					if err != nil {
+						return fmt.Errorf("unable to create file: %v", err)
+					}
+					defer f.Close()
+					permWriter := file.NewDrivePermissionWriter(f)
+					defer permWriter.Flush()
 
-			fileWriter := file.NewDriveFileWriter(f)
-			defer fileWriter.Flush()
-
-			for {
-				// 共有ドライブのファイルとフォルダのメタ情報を取得
-				r, err := svc.Files.List().
-					Corpora("drive").
-					DriveId(dr.Id).
-					IncludeItemsFromAllDrives(true).
-					PageSize(100).
-					PageToken(pageToken).
-					SupportsAllDrives(true).
-					Fields("nextPageToken, files(mimeType, id, name, webViewLink, createdTime, modifiedTime, lastModifyingUser)").
-					Do()
-				if err != nil {
-					return fmt.Errorf("Unable to retrieve files: %v", err)
-				}
-
-				for _, ff := range r.Files {
-					fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
-
-					var _pageToken string
-					for {
-						// ファイルとフォルダの権限情報を取得
-						permissionList, err := svc.Permissions.List(ff.Id).
-							PageSize(100).
-							SupportsAllDrives(true).
-							Fields("permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
-							Do()
-						if err != nil {
-							return fmt.Errorf("Unable to retrieve permission: %v", err)
-						}
-
-						// 共有ドライブのファイルとフォルダの情報と権限情報をファイルに保存
-						for _, p := range permissionList.Permissions {
-							for _, d := range p.PermissionDetails {
-								_ = fileWriter.Write(file.DriveFile{
-									MimeType:          ff.MimeType,
-									ID:                ff.Id,
-									Name:              ff.Name,
-									WebViewLink:       ff.WebViewLink,
-									CreatedTime:       ff.CreatedTime,
-									ModifiedTime:      ff.ModifiedTime,
-									LastModifyingUser: ff.LastModifyingUser,
-									Permission: file.DrivePermission{
+					// 共有ドライブの権限情報を取得
+					if err := svc.Permissions.List(dr.Id).
+						UseDomainAdminAccess(*asAdmin). // Workspace管理者権限で全て取得
+						SupportsAllDrives(true).
+						PageSize(pageSize(100)).
+						Fields("nextPageToken, permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
+						Pages(ctx, func(list *drive.PermissionList) error {
+							for _, p := range list.Permissions {
+								for _, d := range p.PermissionDetails {
+									// 共有ドライブの権限情報をファイルに保存
+									if err := permWriter.Write(file.DrivePermission{
+										Drive:          file.Drive{ID: dr.Id, Name: dr.Name},
+										DisplayName:    p.DisplayName,
 										EmailAddress:   p.EmailAddress,
 										Role:           p.Role,
 										Type:           p.Type,
@@ -196,26 +138,84 @@ func main() {
 										PermissionType: d.PermissionType,
 										InheritedFrom:  d.InheritedFrom,
 										Inherited:      d.Inherited,
-									},
-								})
+									}); err != nil {
+										return fmt.Errorf("unable to write file: %v", err)
+									}
+								}
 							}
-						}
-						_pageToken = permissionList.NextPageToken
-						if _pageToken == "" {
-							break
-						}
+							return nil
+						}); err != nil {
+						return fmt.Errorf("unable to retrieve permissions: %v", err)
 					}
-				}
-				pageToken = r.NextPageToken
-				if pageToken == "" {
-					break
+
+					f, err = os.Create(driveFilePath(dr.Name))
+					if err != nil {
+						return fmt.Errorf("unable to create file: %v", err)
+					}
+					defer f.Close()
+					fileWriter := file.NewDriveFileWriter(f)
+					defer fileWriter.Flush()
+
+					// 共有ドライブのファイルとフォルダのメタ情報を取得
+					if err := svc.Files.List().
+						SupportsAllDrives(true).
+						PageSize(pageSize(100)).
+						Corpora("drive").
+						DriveId(dr.Id).
+						IncludeItemsFromAllDrives(true).
+						Fields("nextPageToken, files(mimeType, id, name, webViewLink, createdTime, modifiedTime, lastModifyingUser)").
+						Pages(ctx, func(list *drive.FileList) error {
+							for _, ff := range list.Files {
+								fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
+								// ファイルとフォルダの権限情報を取得
+								if err := svc.Permissions.List(ff.Id).
+									UseDomainAdminAccess(*asAdmin).
+									SupportsAllDrives(true).
+									PageSize(pageSize(100)).
+									Fields("nextPageToken, permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
+									Pages(ctx, func(list *drive.PermissionList) error {
+										for _, p := range list.Permissions {
+											for _, d := range p.PermissionDetails {
+												// 共有ドライブのファイルとフォルダの情報とその権限情報をファイルに保存
+												if err := fileWriter.Write(file.DriveFile{
+													MimeType:          ff.MimeType,
+													ID:                ff.Id,
+													Name:              ff.Name,
+													WebViewLink:       ff.WebViewLink,
+													CreatedTime:       ff.CreatedTime,
+													ModifiedTime:      ff.ModifiedTime,
+													LastModifyingUser: ff.LastModifyingUser,
+													Permission: file.DrivePermission{
+														EmailAddress:   p.EmailAddress,
+														Role:           p.Role,
+														Type:           p.Type,
+														Deleted:        p.Deleted,
+														PermissionType: d.PermissionType,
+														InheritedFrom:  d.InheritedFrom,
+														Inherited:      d.Inherited,
+													},
+												}); err != nil {
+													return fmt.Errorf("unable to write file: %v", err)
+												}
+											}
+										}
+										return nil
+									}); err != nil {
+									return fmt.Errorf("unable to retrieve permission: %v", err)
+								}
+							}
+							return nil
+						}); err != nil {
+						return fmt.Errorf("unable to retrieve files: %v", err)
+					}
+					return nil
+				}(); err != nil {
+					return err
 				}
 			}
 			return nil
-		}()
-		if err != nil {
-			log.Fatalln(err)
-		}
+		}); err != nil {
+		log.Fatalf("Unable to retrieve drives: %v", err)
 	}
 }
 

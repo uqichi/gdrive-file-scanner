@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/uqichi/gdrive-file-scanner/file"
@@ -73,6 +74,8 @@ func main() {
 		"ドメイン管理者としてリクエストを発行します。リクエスト元が管理者であるドメインのすべての共有ドライブが返されます。")
 	driveID := flag.String("driveId", "",
 		"検索する共有ドライブのID。すべての共有ドライブが対象となります。")
+	allowDomain := flag.String("allow", "",
+		"許可された権限を参照するユーザーまたはグループのメールアドレス。基本的には自社ドメインを指定することになります。")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -83,7 +86,7 @@ func main() {
 	}
 
 	// If modifying these scopes, delete your previously saved token file.
-	config, err := google.ConfigFromJSON(b, drive.DriveScope)
+	config, err := google.ConfigFromJSON(b, drive.DriveReadonlyScope)
 	if err != nil {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
@@ -166,16 +169,24 @@ func main() {
 						Fields("nextPageToken, files(mimeType, id, name, webViewLink, createdTime, modifiedTime, lastModifyingUser)").
 						Pages(ctx, func(list *drive.FileList) error {
 							for _, ff := range list.Files {
-								fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
 								// ファイルとフォルダの権限情報を取得
 								if err := svc.Permissions.List(ff.Id).
 									UseDomainAdminAccess(*asAdmin).
 									SupportsAllDrives(true).
 									PageSize(pageSize(100)).
-									Fields("nextPageToken, permissions(id, displayName, emailAddress, role, type, permissionDetails, deleted)").
+									Fields("nextPageToken, permissions(id, displayName, emailAddress, domain, role, type, permissionDetails, deleted)").
 									Pages(ctx, func(list *drive.PermissionList) error {
 										for _, p := range list.Permissions {
 											for _, d := range p.PermissionDetails {
+												if strings.HasSuffix(p.EmailAddress, *allowDomain) {
+													// 許可されたドメインはスキップ
+													continue
+												}
+												if strings.HasSuffix(p.Domain, *allowDomain) {
+													// 許可されたドメインはスキップ
+													continue
+												}
+												fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
 												// 共有ドライブのファイルとフォルダの情報とその権限情報をファイルに保存
 												if err := fileWriter.Write(file.DriveFile{
 													MimeType:          ff.MimeType,

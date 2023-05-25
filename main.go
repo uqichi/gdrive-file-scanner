@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ const (
 )
 
 var (
+	buildDir          string
 	buildDirDriveFile string
 	buildDirDrivePerm string
 )
@@ -35,11 +37,12 @@ func init() {
 
 	const destDir = "build"
 	suffix := time.Now().Format("20060102")
-	buildDirDriveFile = fmt.Sprintf("%s_%s/file", destDir, suffix)
+	buildDir = fmt.Sprintf("%s_%s", destDir, suffix)
+	buildDirDriveFile = fmt.Sprintf("%s/file", buildDir)
 	if err := os.MkdirAll(buildDirDriveFile, os.ModePerm); err != nil {
 		log.Fatalf("Unable to create directory: %v", err)
 	}
-	buildDirDrivePerm = fmt.Sprintf("%s_%s/perm", destDir, suffix)
+	buildDirDrivePerm = fmt.Sprintf("%s/perm", buildDir)
 	if err := os.MkdirAll(buildDirDrivePerm, os.ModePerm); err != nil {
 		log.Fatalf("Unable to create directory: %v", err)
 	}
@@ -97,6 +100,16 @@ func main() {
 		log.Fatalf("Unable to retrieve Drive client: %v", err)
 	}
 
+	// error log writer
+	errFile, err := os.OpenFile(fmt.Sprintf("%s/error.log", buildDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		log.Fatalf("Unable to open error log file: %v", err)
+	}
+	defer errFile.Close()
+
+	log.SetOutput(io.MultiWriter(errFile, os.Stdout))
+	log.SetFlags(log.Ldate | log.Ltime)
+
 	// 共有ドライブ一覧を取得
 	if err := svc.Drives.List().
 		Context(ctx).
@@ -104,9 +117,8 @@ func main() {
 		PageSize(pageSize(100)).
 		Pages(ctx, func(list *drive.DriveList) error {
 			for _, dr := range list.Drives {
+				fmt.Printf("Drive: %s (%s)\n", dr.Name, dr.Id)
 				if err := func() error {
-					fmt.Printf("Drive: %s (%s)\n", dr.Name, dr.Id)
-
 					if *driveID != "" && *driveID != dr.Id {
 						// 共有ドライブIDの指定がある場合該当しないものはスキップ
 						fmt.Printf("%cSkipped\n", rune(9))
@@ -169,6 +181,7 @@ func main() {
 						Fields("nextPageToken, files(mimeType, id, name, webViewLink, createdTime, modifiedTime, lastModifyingUser)").
 						Pages(ctx, func(list *drive.FileList) error {
 							for _, ff := range list.Files {
+								fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
 								// ファイルとフォルダの権限情報を取得
 								if err := svc.Permissions.List(ff.Id).
 									UseDomainAdminAccess(*asAdmin).
@@ -178,15 +191,14 @@ func main() {
 									Pages(ctx, func(list *drive.PermissionList) error {
 										for _, p := range list.Permissions {
 											for _, d := range p.PermissionDetails {
-												if strings.HasSuffix(p.EmailAddress, *allowDomain) {
+												if *allowDomain != "" && strings.HasSuffix(p.EmailAddress, *allowDomain) {
 													// 許可されたドメインはスキップ
 													continue
 												}
-												if strings.HasSuffix(p.Domain, *allowDomain) {
+												if *allowDomain != "" && strings.HasSuffix(p.Domain, *allowDomain) {
 													// 許可されたドメインはスキップ
 													continue
 												}
-												fmt.Printf("%cFile: %s (%s)\n", rune(9), ff.Name, ff.Id)
 												// 共有ドライブのファイルとフォルダの情報とその権限情報をファイルに保存
 												if err := fileWriter.Write(file.DriveFile{
 													MimeType:          ff.MimeType,
@@ -212,7 +224,10 @@ func main() {
 										}
 										return nil
 									}); err != nil {
-									return fmt.Errorf("unable to retrieve permission: %v", err)
+									// TODO: たまに原因不明500エラーがでて処理が止まってしまうのでログ残しつつスキップ
+									//return fmt.Errorf("unable to retrieve permission: %v", err)
+									log.Printf("unable to retrieve permission: %v, File: %s (%s)\n", err, ff.Name, ff.Id)
+									return nil
 								}
 							}
 							return nil
